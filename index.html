@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RPG Multiplayer - Retro Cartoon</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Fredoka+One&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; font-family: 'Fredoka One', cursive; background: #ffeaa7; }
+    canvas { display: block; background: #e0ecf8; }
+    #startScreen {
+      position: absolute; width: 100%; height: 100%; background: #fff3;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      gap: 15px; z-index: 99; backdrop-filter: blur(4px);
+    }
+    input, button { padding: 10px; font-size: 16px; border-radius: 8px; border: 3px solid #636e72; font-family: 'Fredoka One'; }
+    #joystick { display: none; position: absolute; bottom: 15%; left: 5%; width: 100px; height: 100px; background: rgba(200,200,200,0.2); border: 2px solid #999; border-radius: 50%; }
+    #stick { width: 40px; height: 40px; background: #444; border-radius: 50%; position: absolute; left: 30px; top: 30px; }
+    #chatBox { display: flex; position: absolute; bottom: 0; width: 100%; background: #fff; border-top: 1px solid #ccc; z-index: 10; }
+    #chatInput { flex: 1; font-size: 16px; padding: 10px; border: none; }
+    #chatBtn { padding: 10px; font-size: 16px; background: #28a745; color: white; border: none; }
+    #interactBtn, #studentListBtn { position: absolute; z-index: 10; padding: 6px 12px; border-radius: 6px; }
+    #interactBtn { background: #ffc107; color: #000; display: none; top: 20%; left: 50%; }
+    #studentListBtn { top: 10px; right: 10px; background: #2196f3; color: white; }
+    #studentList { position: absolute; top: 50px; right: 10px; background: white; border: 1px solid #ccc; border-radius: 6px; padding: 10px; display: none; max-height: 200px; overflow-y: auto; z-index: 10; }
+    #clockUI {
+      position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+      font-size: 16px; color: #2d3436; background: #fff; padding: 6px 12px;
+      border-radius: 8px; font-family: 'Press Start 2P', cursive; z-index: 100;
+    }
+    #minimap {
+      position: absolute; left: 10px; top: 10px;
+      width: 100px; height: 100px;
+      background: #dfe6e9; border: 2px solid #2d3436;
+      border-radius: 10px; z-index: 15;
+    }
+  </style>
+</head>
+<body>
+  <div id="startScreen">
+    <h2>🏫 Masukkan Nama</h2>
+    <input id="playerName" placeholder="Nama Kamu">
+    <div>
+      <button onclick="startGame('boy')">🟦 Cowok</button>
+      <button onclick="startGame('girl')">🟥 Cewek</button>
+    </div>
+  </div>
+
+  <div id="clockUI">🕒 00:00</div>
+  <canvas id="minimap"></canvas>
+  <canvas id="gameCanvas"></canvas>
+  <div id="joystick"><div id="stick"></div></div>
+  <div id="chatBox">
+    <input id="chatInput" placeholder="Tulis pesan...">
+    <button id="chatBtn">Kirim</button>
+  </div>
+  <button id="interactBtn">Interaksi</button>
+  <button id="studentListBtn" onclick="toggleList()">Daftar Siswa</button>
+  <div id="studentList"></div>
+
+  <script>
+    function updateClock() {
+      const now = new Date();
+      const h = String(now.getHours()).padStart(2, '0');
+      const m = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById("clockUI").textContent = `🕒 ${h}:${m}`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) document.getElementById("joystick").style.display = "block";
+
+    const joystick = document.getElementById("joystick");
+    const stick = document.getElementById("stick");
+    let dragging = false, dx = 0, dy = 0;
+    stick.addEventListener("touchstart", e => {
+      dragging = true;
+      originX = e.touches[0].clientX;
+      originY = e.touches[0].clientY;
+    });
+    window.addEventListener("touchmove", e => {
+      if (!dragging) return;
+      dx = e.touches[0].clientX - originX;
+      dy = e.touches[0].clientY - originY;
+      stick.style.transform = `translate(${dx}px, ${dy}px)`;
+    });
+    window.addEventListener("touchend", () => {
+      dragging = false;
+      dx = dy = 0;
+      stick.style.transform = "translate(0, 0)";
+    });
+
+    const firebaseConfig = {
+  apiKey: "AIzaSyB7pgG9aZaaKp3JVCFqva4Zx0hF1IscU-c",
+  authDomain: "kelas-120af.firebaseapp.com",
+  databaseURL: "https://kelas-120af-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "kelas-120af",
+  storageBucket: "kelas-120af.firebasestorage.app",
+  messagingSenderId: "844805065980",
+  appId: "1:844805065980:web:6915421a3944fba3addb79",
+  measurementId: "G-5ZHW7N160H"
+};
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const playerId = Math.random().toString(36).substr(2, 9);
+    let playerRef, playerX = 100, playerY = 100;
+    const adminX = 300, adminY = 200;
+    const chatBubbles = {};
+    const adminBubble = { visible: false, timer: null, message: "⚠️ Ini masih progres demo ya. -akmal" };
+
+    function toggleList() {
+      const list = document.getElementById("studentList");
+      list.style.display = list.style.display === "block" ? "none" : "block";
+    }
+
+    function startGame(gender) {
+      const name = document.getElementById("playerName").value;
+      if (!name) return alert("Isi nama dulu ya!");
+      document.getElementById("startScreen").style.display = "none";
+      initGame(name, gender);
+    }
+
+    function initGame(name, gender) {
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      const minimap = document.getElementById("minimap");
+      const mtx = minimap.getContext("2d");
+
+      playerRef = db.ref("players/" + playerId);
+      playerRef.set({ name, gender, x: playerX, y: playerY });
+      playerRef.onDisconnect().remove();
+
+      document.getElementById("interactBtn").onclick = () => {
+        adminBubble.visible = true;
+        clearTimeout(adminBubble.timer);
+        adminBubble.timer = setTimeout(() => adminBubble.visible = false, 5000);
+      };
+
+      db.ref("chat").limitToLast(10).on("child_added", snap => {
+        const { name, message } = snap.val();
+        chatBubbles[name] = message;
+        setTimeout(() => {
+          if (chatBubbles[name] === message) delete chatBubbles[name];
+        }, 5000);
+      });
+
+      document.getElementById("chatBtn").onclick = () => {
+        const message = document.getElementById("chatInput").value;
+        if (message.trim()) {
+          db.ref("chat").push({ name, message });
+          document.getElementById("chatInput").value = "";
+        }
+      };
+
+      function updateMovement() {
+        playerX += dx * 0.1;
+        playerY += dy * 0.1;
+        if (playerRef) playerRef.update({ x: playerX, y: playerY });
+        requestAnimationFrame(updateMovement);
+      }
+      updateMovement();
+
+      db.ref("players").on("value", snapshot => {
+        const players = snapshot.val() || {};
+        document.getElementById("studentList").innerHTML = Object.values(players).map(p => `<div>${p.name}</div>`).join("");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const camX = playerX - canvas.width / 2;
+        const camY = playerY - canvas.height / 2;
+
+        ctx.fillStyle = "#f39c12";
+        ctx.fillRect(adminX - camX, adminY - camY, 40, 40);
+        ctx.fillStyle = "#2d3436";
+        ctx.fillText("Admin", adminX - camX + 20, adminY - camY - 10);
+        if (adminBubble.visible) {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(adminX - camX - 10, adminY - camY - 50, 140, 25);
+          ctx.strokeStyle = "#000";
+          ctx.strokeRect(adminX - camX - 10, adminY - camY - 50, 140, 25);
+          ctx.fillStyle = "#000";
+          ctx.font = "12px Arial";
+          ctx.fillText(adminBubble.message, adminX - camX + 60, adminY - camY - 32);
+        }
+
+        Object.keys(players).forEach(id => {
+          const p = players[id];
+          ctx.fillStyle = p.gender === "boy" ? "#3498db" : "#e84393";
+          ctx.fillRect(p.x - camX, p.y - camY, 40, 40);
+          ctx.fillStyle = "#2d3436";
+          ctx.fillText(p.name, p.x - camX + 20, p.y - camY - 10);
+
+          if (chatBubbles[p.name]) {
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(p.x - camX - 10, p.y - camY - 50, 100, 25);
+            ctx.strokeStyle = "#000";
+            ctx.strokeRect(p.x - camX - 10, p.y - camY - 50, 100, 25);
+            ctx.fillStyle = "#000";
+            ctx.font = "12px Arial";
+            ctx.fillText(chatBubbles[p.name], p.x - camX + 40, p.y - camY - 32);
+          }
+
+          if (id === playerId) {
+            playerX = p.x;
+            playerY = p.y;
+            checkDistanceToAdmin();
+          }
+        });
+
+        // Update minimap
+        const scale = 0.1;
+        mtx.clearRect(0, 0, minimap.width, minimap.height);
+        for (let id in players) {
+          const p = players[id];
+          const px = p.x * scale;
+          const py = p.y * scale;
+          mtx.fillStyle = id === playerId ? "lime" : (p.gender === "boy" ? "#3498db" : "#e84393");
+          mtx.beginPath();
+          mtx.arc(px, py, id === playerId ? 5 : 3, 0, 2 * Math.PI);
+          mtx.fill();
+        }
+        mtx.fillStyle = "gold";
+        mtx.beginPath();
+        mtx.arc(adminX * scale, adminY * scale, 5, 0, 2 * Math.PI);
+        mtx.fill();
+      });
+
+      window.addEventListener("keydown", e => {
+        if (e.key === "ArrowUp") playerY -= 10;
+        if (e.key === "ArrowDown") playerY += 10;
+        if (e.key === "ArrowLeft") playerX -= 10;
+        if (e.key === "ArrowRight") playerX += 10;
+        if (playerRef) playerRef.update({ x: playerX, y: playerY });
+      });
+    }
+
+    function checkDistanceToAdmin() {
+      const dist = Math.hypot(playerX - adminX, playerY - adminY);
+      document.getElementById("interactBtn").style.display = dist < 60 ? "block" : "none";
+    }
+  </script>
+</body>
+</html>
