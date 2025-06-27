@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RPG Multiplayer - Retro Emoji</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Fredoka+One&display=swap" rel="stylesheet">
+  <style>
+    html, body {
+      margin: 0; padding: 0; overflow: hidden;
+      font-family: 'Fredoka One', cursive; background: #ffeaa7;
+    }
+    canvas { display: block; background: #e0ecf8; }
+    #startScreen {
+      position: absolute; width: 100%; height: 100%; background: #fff5;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      gap: 15px; z-index: 99; backdrop-filter: blur(6px);
+    }
+    input, button, select {
+      padding: 10px; font-size: 16px; border-radius: 8px;
+      border: 3px solid #636e72; font-family: 'Fredoka One';
+    }
+    #uiTopBar {
+      position: absolute; top: 0; left: 0; width: 100%; height: 60px;
+      background: #a47551; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 10px; box-sizing: border-box; z-index: 100;
+      color: #fff; font-family: 'Press Start 2P'; font-size: 12px;
+    }
+    #clockUI, #minimap, #studentListBtn {
+      margin: 0 5px;
+    }
+    #clockUI {
+      background: #6d4c41; padding: 6px 12px; border-radius: 8px;
+    }
+    #minimap {
+      width: 100px; height: 50px;
+      background: #d7ccc8; border: 2px solid #4e342e;
+      border-radius: 8px;
+    }
+    #studentListBtn {
+      background: #795548; color: white; border: none;
+    }
+    #studentList {
+      position: absolute; top: 60px; right: 10px; background: #fff8e1;
+      border: 1px solid #8d6e63; border-radius: 6px; padding: 10px;
+      display: none; max-height: 200px; overflow-y: auto; z-index: 10;
+      font-family: 'Fredoka One'; font-size: 14px;
+    }
+    #joystick { display: none; position: absolute; bottom: 15%; left: 5%; width: 100px; height: 100px; background: rgba(200,200,200,0.2); border: 2px solid #999; border-radius: 50%; }
+    #stick { width: 40px; height: 40px; background: #444; border-radius: 50%; position: absolute; left: 30px; top: 30px; }
+    #chatBox { display: flex; position: absolute; bottom: 0; width: 100%; background: #fff; border-top: 1px solid #ccc; z-index: 10; }
+    #chatInput { flex: 1; font-size: 16px; padding: 10px; border: none; }
+    #chatBtn { padding: 10px; font-size: 16px; background: #28a745; color: white; border: none; }
+    #interactBtn {
+      position: absolute; z-index: 10; padding: 6px 12px;
+      border-radius: 6px; background: #ffc107; color: #000;
+      display: none; top: 20%; left: 50%;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- UI Top Kayu -->
+  <div id="uiTopBar">
+    <canvas id="minimap"></canvas>
+    <div id="clockUI">🕒 00:00</div>
+    <button id="studentListBtn" onclick="toggleList()">📋 Siswa</button>
+  </div>
+  <div id="studentList"></div>
+
+  <!-- Start Screen -->
+  <div id="startScreen">
+    <h2>🏫 Masukkan Nama</h2>
+    <input id="playerName" placeholder="Nama Kamu">
+    <div>
+      <button onclick="selectGender('boy')">🟦 Cowok</button>
+      <button onclick="selectGender('girl')">🟥 Cewek</button>
+    </div>
+    <select id="emojiSelect" style="display:none;"></select>
+    <button id="startBtn" style="display:none;" onclick="startGame()">🎮 Mulai</button>
+  </div>
+
+  <!-- Game Canvas & UI -->
+  <canvas id="gameCanvas"></canvas>
+  <div id="joystick"><div id="stick"></div></div>
+  <div id="chatBox">
+    <input id="chatInput" placeholder="Tulis pesan (max 50 kata)...">
+    <button id="chatBtn">Kirim</button>
+  </div>
+  <button id="interactBtn">Interaksi</button>
+  <script>
+    // Clock
+    function updateClock() {
+      const now = new Date();
+      const h = String(now.getHours()).padStart(2, '0');
+      const m = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById("clockUI").textContent = `🕒 ${h}:${m}`;
+    }
+    setInterval(updateClock, 1000); updateClock();
+
+    // Joystick mobile
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) document.getElementById("joystick").style.display = "block";
+
+    const joystick = document.getElementById("joystick");
+    const stick = document.getElementById("stick");
+    let dragging = false, dx = 0, dy = 0;
+    stick.addEventListener("touchstart", e => {
+      dragging = true;
+      originX = e.touches[0].clientX;
+      originY = e.touches[0].clientY;
+    });
+    window.addEventListener("touchmove", e => {
+      if (!dragging) return;
+      dx = e.touches[0].clientX - originX;
+      dy = e.touches[0].clientY - originY;
+      stick.style.transform = `translate(${dx}px, ${dy}px)`;
+    });
+    window.addEventListener("touchend", () => {
+      dragging = false; dx = dy = 0;
+      stick.style.transform = "translate(0, 0)";
+    });
+
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyB7pgG9aZaaKp3JVCFqva4Zx0hF1IscU-c",
+      authDomain: "kelas-120af.firebaseapp.com",
+      databaseURL: "https://kelas-120af-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "kelas-120af",
+      storageBucket: "kelas-120af.appspot.com",
+      messagingSenderId: "844805065980",
+      appId: "1:844805065980:web:6915421a3944fba3addb79"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const playerId = Math.random().toString(36).substr(2, 9);
+    let playerRef, playerX = 100, playerY = 100, selectedEmoji = "👦";
+
+    const adminX = 300, adminY = 200;
+    const chatBubbles = {};
+    const adminBubble = { visible: false, timer: null, message: "⚠️ Ini masih progres demo ya. -akmal" };
+
+    function toggleList() {
+      const list = document.getElementById("studentList");
+      list.style.display = list.style.display === "block" ? "none" : "block";
+    }
+
+    // Gender & Emoji Selection
+    function selectGender(gender) {
+      const emojiSelect = document.getElementById("emojiSelect");
+      emojiSelect.style.display = "inline-block";
+      document.getElementById("startBtn").style.display = "inline-block";
+      emojiSelect.innerHTML = "";
+      const emojis = gender === "boy" ? ["👦🏿", "🧑", "🧔", "👨‍🦱", "👨", "👱", "🧑‍🦰"] : ["👧", "👩", "👩‍🦱", "👩‍🦰", "👱‍♀️"];
+      emojis.forEach(e => {
+        const opt = document.createElement("option");
+        opt.value = e;
+        opt.textContent = e;
+        emojiSelect.appendChild(opt);
+      });
+      emojiSelect.onchange = () => selectedEmoji = emojiSelect.value;
+      selectedEmoji = emojiSelect.value = emojis[0];
+    }
+
+    function startGame() {
+      const name = document.getElementById("playerName").value;
+      if (!name) return alert("Isi nama dulu ya!");
+      document.getElementById("startScreen").style.display = "none";
+      initGame(name);
+    }
+    function initGame(name) {
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      const minimap = document.getElementById("minimap");
+      const mtx = minimap.getContext("2d");
+
+      playerRef = db.ref("players/" + playerId);
+      playerRef.set({ name, emoji: selectedEmoji, x: playerX, y: playerY });
+      playerRef.onDisconnect().remove();
+
+      document.getElementById("interactBtn").onclick = () => {
+        adminBubble.visible = true;
+        clearTimeout(adminBubble.timer);
+        adminBubble.timer = setTimeout(() => adminBubble.visible = false, 5000);
+      };
+
+      // Chat
+      document.getElementById("chatBtn").onclick = () => {
+        const input = document.getElementById("chatInput");
+        const message = input.value.trim();
+        const wordCount = message.split(/\s+/).length;
+        if (!message) return;
+        if (wordCount > 50) return alert("Maksimal 50 kata!");
+        db.ref("chat").push({ name, message });
+        input.value = "";
+      };
+
+      db.ref("chat").limitToLast(10).on("child_added", snap => {
+        const { name, message } = snap.val();
+        chatBubbles[name] = message;
+        setTimeout(() => {
+          if (chatBubbles[name] === message) delete chatBubbles[name];
+        }, 5000);
+      });
+
+      // Movement update loop
+      function updateMovement() {
+        playerX += dx * 0.1;
+        playerY += dy * 0.1;
+        if (playerRef) playerRef.update({ x: playerX, y: playerY });
+        requestAnimationFrame(updateMovement);
+      }
+      updateMovement();
+
+      // Render loop
+      db.ref("players").on("value", snapshot => {
+        const players = snapshot.val() || {};
+        document.getElementById("studentList").innerHTML =
+          Object.values(players).map(p => `<div>${p.name}</div>`).join("");
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const camX = playerX - canvas.width / 2;
+        const camY = playerY - canvas.height / 2;
+
+        // Admin
+        ctx.font = "16px Arial";
+        ctx.fillStyle = "#f39c12";
+        ctx.fillRect(adminX - camX, adminY - camY, 40, 40);
+        ctx.fillStyle = "#2d3436";
+        ctx.fillText("Admin", adminX - camX, adminY - camY - 10);
+        if (adminBubble.visible) {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(adminX - camX - 10, adminY - camY - 50, 160, 40);
+          ctx.strokeStyle = "#000";
+          ctx.strokeRect(adminX - camX - 10, adminY - camY - 50, 160, 40);
+          ctx.fillStyle = "#000";
+          ctx.font = "12px Arial";
+          ctx.fillText(adminBubble.message, adminX - camX - 5, adminY - camY - 30);
+        }
+
+        // Render Players
+        Object.keys(players).forEach(id => {
+          const p = players[id];
+          ctx.font = "24px Arial";
+          ctx.fillText(p.emoji, p.x - camX, p.y - camY + 10);
+          ctx.font = "12px Arial";
+          ctx.fillText(p.name, p.x - camX, p.y - camY - 10);
+
+          if (chatBubbles[p.name]) {
+            const maxWidth = 120;
+            const lineHeight = 16;
+            const lines = wrapText(chatBubbles[p.name], ctx, maxWidth);
+            const boxHeight = lines.length * lineHeight + 10;
+
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(p.x - camX - 5, p.y - camY - boxHeight - 30, maxWidth + 10, boxHeight);
+            ctx.strokeStyle = "#000";
+            ctx.strokeRect(p.x - camX - 5, p.y - camY - boxHeight - 30, maxWidth + 10, boxHeight);
+
+            ctx.fillStyle = "#000";
+            ctx.font = "12px Arial";
+            lines.forEach((line, i) => {
+              ctx.fillText(line, p.x - camX, p.y - camY - boxHeight - 10 + i * lineHeight);
+            });
+          }
+
+          if (id === playerId) {
+            playerX = p.x; playerY = p.y;
+            checkDistanceToAdmin();
+          }
+        });
+
+        // Minimap
+        const scale = 0.1;
+        mtx.clearRect(0, 0, minimap.width, minimap.height);
+        for (let id in players) {
+          const p = players[id];
+          const px = p.x * scale;
+          const py = p.y * scale;
+          mtx.fillStyle = id === playerId ? "lime" : "#555";
+          mtx.beginPath();
+          mtx.arc(px, py, 4, 0, 2 * Math.PI);
+          mtx.fill();
+        }
+        mtx.fillStyle = "gold";
+        mtx.beginPath();
+        mtx.arc(adminX * scale, adminY * scale, 4, 0, 2 * Math.PI);
+        mtx.fill();
+      });
+
+      window.addEventListener("keydown", e => {
+        if (e.key === "ArrowUp") playerY -= 10;
+        if (e.key === "ArrowDown") playerY += 10;
+        if (e.key === "ArrowLeft") playerX -= 10;
+        if (e.key === "ArrowRight") playerX += 10;
+        if (playerRef) playerRef.update({ x: playerX, y: playerY });
+      });
+    }
+
+    function checkDistanceToAdmin() {
+      const dist = Math.hypot(playerX - adminX, playerY - adminY);
+      document.getElementById("interactBtn").style.display = dist < 60 ? "block" : "none";
+    }
+
+    // Wrap Text Helper
+    function wrapText(text, ctx, maxWidth) {
+      const words = text.split(" ");
+      const lines = [];
+      let line = "";
+      for (let n = 0; n < words.length; n++) {
+        const testLine = line + words[n] + " ";
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && n > 0) {
+          lines.push(line);
+          line = words[n] + " ";
+        } else {
+          line = testLine;
+        }
+      }
+      lines.push(line);
+      return lines;
+    }
+  </script>
+</body>
+</html>
